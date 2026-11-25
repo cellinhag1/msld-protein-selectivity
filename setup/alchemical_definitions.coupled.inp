@@ -1,0 +1,70 @@
+! PDE5A -> PDE6 coupled-lambda mutation, SIDECHAIN-ONLY patching.
+! 8 direct-contact pocket residues, ONE lambda switches all 8 at once:
+!   lambda=0 -> all PDE5A sidechains ; lambda=1 -> all PDE6-like sidechains
+! Backbone is shared (real, not duplicated) -- no CATS needed.
+! s{ii}seq2 = one-letter mutant code (used by sc_selectloop.inp's "type %%%X")
+! s{ii}patch = PRES name applied by sc_patchloop.inp
+! NOTE: do NOT set nsites here -- ALF writes nsites=1, nblocks=2 into variablesflat.inp.
+set fnex = 8.5
+
+set naa = 8
+
+set nsubs1 = 2
+set nsubs2 = 2
+set nsubs3 = 2
+set nsubs4 = 2
+set nsubs5 = 2
+set nsubs6 = 2
+set nsubs7 = 2
+set nsubs8 = 2
+
+set resid1  = 663
+set s1seq1  = 0
+set s1seq2  = l          ! S663L (H-loop)
+set s1patch = SC2L
+set segid1  = PROA
+
+set resid2  = 778
+set s2seq1  = 0
+set s2seq2  = v          ! I778V
+set s2patch = SC2V
+set segid2  = PROA
+
+set resid3  = 787
+set s3seq1  = 0
+set s3seq2  = w          ! F787W
+set s3patch = SC2W
+set segid3  = PROA
+
+set resid4  = 804
+set s4seq1  = 0
+set s4seq2  = m          ! L804M
+set s4patch = SC2M
+set segid4  = PROA
+
+set resid5  = 813
+set s5seq1  = 0
+set s5seq2  = l          ! I813L
+set s5patch = SC2L
+set segid5  = PROA
+
+set resid6  = 816
+set s6seq1  = 0
+set s6seq2  = l          ! M816L
+set s6patch = SC2L
+set segid6  = PROA
+
+set resid7  = 823
+set s7seq1  = 0
+set s7seq2  = f          ! A823F
+set s7patch = SC2F
+set segid7  = PROA
+
+set resid8  = 824
+set s8seq1  = 0
+set s8seq2  = v          ! I824V
+set s8patch = SC2V
+set segid8  = PROA
+
+set aainitl = 0
+set aafinal = @naa

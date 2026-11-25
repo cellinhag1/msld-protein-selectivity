@@ -1,0 +1,28 @@
+! Sidechain-only BLOCK selections.
+! sub1 = native (WT) sidechain atoms; sub2 = patch-added mutant sidechain
+! atoms (identified by the site's one-letter mutant code, e.g. type %%%L).
+! Backbone (N,HN,CA,HA,C,O) is excluded entirely -- it stays in the
+! environment block, shared by both substituents, for real (not restrained).
+
+calc ii = @aainitl + 1
+label selesiteloop
+if @ii .le. @aafinal then
+   set segid = @segid@@ii
+   set resid = @resid@@ii
+   set site = @ii
+   set seqjj = @{s@@{ii}seq2}
+
+   define site@{site}sub2 -
+      select ( segid @segid .and. resid @resid .and. type %%%@{seqjj} ) show end
+
+   define site@{site}suball -
+      select ( segid @segid .and. resid @resid .and. -
+      .not. ( type N .or. type HN .or. type CA .or. type HA .or. -
+              type C .or. type O ) ) show end
+
+   define site@{site}sub1 -
+      select ( site@{site}suball .and. .not. site@{site}sub2 ) show end
+
+   calc ii = @ii + 1
+   goto selesiteloop
+endif

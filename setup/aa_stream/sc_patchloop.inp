@@ -1,0 +1,43 @@
+bomlev -2
+
+! Sidechain-only patching: apply one patch per site.
+! No link patches, no terminal caps, no backbone duplication -- backbone
+! stays exactly as read in, shared by every substituent at every site.
+
+autogen nopatch
+
+calc ii = @aainitl + 1
+label patchsiteloop
+if @ii .le. @aafinal then
+
+   set segid = @segid@@ii
+   set resid = @resid@@ii
+   set patchname = @{s@@{ii}patch}
+
+   patch @patchname @segid @resid@@ii setup warn
+
+   calc ii = @ii + 1
+   goto patchsiteloop
+endif
+
+! Build coordinates for the newly added mutant sidechain atoms
+ic param
+ic build
+
+! Autogenerate angles/dihedrals local to each patched residue
+define siteallsuball select none end
+
+calc ii = @aainitl + 1
+label autogenloop
+if @ii .le. @aafinal then
+   set segid = @segid@@ii
+   set resid = @resid@@ii
+
+   define siteallsuball select siteallsuball .or. -
+      ( segid @segid .and. resid @resid ) end
+
+   calc ii = @ii + 1
+   goto autogenloop
+endif
+
+auto angle dihe sele .bonded. .bonded. .bonded. siteallsuball end

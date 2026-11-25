@@ -1,0 +1,16 @@
+* Load sidechain-only MSLD patch definitions (derived from the validated
+* full-residue aa_l/aa_v/aa_w/aa_m/aa_f patches -- see build_sidechain_patches.py)
+* Each adds ONLY the mutant sidechain (suffixed by its one-letter code) onto
+* the existing, shared backbone. No backbone duplication, no CATS needed.
+*
+bomlev -1
+
+stream "prep/patches/sc2l.rtf"
+stream "prep/patches/sc2v.rtf"
+stream "prep/patches/sc2w.rtf"
+stream "prep/patches/sc2m.rtf"
+stream "prep/patches/sc2f.rtf"
+
+bomlev 0
+
+return

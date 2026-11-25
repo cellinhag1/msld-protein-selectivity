@@ -1,0 +1,26 @@
+! Merge all 8 patch sites into ONE coupled alchemical site (site 1, 2 subs):
+!   site1sub1 = union of every residue's native sidechain atoms  -> block 2
+!   site1sub2 = union of every residue's mutant sidechain atoms  -> block 3
+! Run after sc_selectloop.inp. Backbone is never touched -- it is real
+! environment, shared, no CATS restraint needed (sidechain-only patching).
+define cplsub1 select none end
+define cplsub2 select none end
+
+calc ii = @aainitl + 1
+label cplloop
+if @ii .le. @aafinal then
+   define cplsub1 select cplsub1 .or. site@{ii}sub1 end
+   define cplsub2 select cplsub2 .or. site@{ii}sub2 end
+   calc ii = @ii + 1
+   goto cplloop
+endif
+
+define site1sub1 select cplsub1 show end
+define site1sub2 select cplsub2 show end
+
+! Remove every bonded term spanning native-copy and mutant-copy sidechain
+! atoms (same-residue AND, importantly, the adjacent 823/824 pair -- since
+! sidechain-only patching never links residues at all, this only matters
+! within a single residue's own two substituents, but run over the full
+! union for consistency/safety).
+dele conn sele ( cplsub1 ) show end sele ( cplsub2 ) show end
