@@ -11,13 +11,16 @@ pocket of isoform A into the pocket of isoform B *in silico* and measure what
 that does to binding, you can ask which residues a selective compound would
 have to exploit.
 
-## Two pieces
+## Three pieces
 
 **`setup/`** — the alchemical machinery: how to make N pocket residues
 switch identity during a simulation.
 
 **`analysis/`** — the Potts decomposition: how to get from one whole-panel
 number to a per-residue breakdown.
+
+**`fep_crosscheck/`** — an independent fixed-λ FEP calculation on the same
+system, to test the λ-dynamics answer by a different method.
 
 ## Sidechain-only patching, without CATS
 
@@ -110,6 +113,30 @@ Three checks it prints, which matter more than the ranking:
 - **Bootstrap error bars**, resampled across independent trials. A site that
   transitions less often than its neighbours gets a wider bar, which is the
   correct consequence rather than a reason to discard it.
+
+## Checking the answer by a different method
+
+λ-dynamics treats λ as a dynamical variable driven by an adaptively learned
+bias. Conventional FEP pins λ to a fixed value in each of many independent
+windows and recombines them with MBAR. They should agree, and when they do not
+the useful question is whether the method or the setup is responsible.
+
+`fep_crosscheck/` removes that ambiguity. It streams **the same prep files**
+used above and overrides only the `BLOCK` command, replacing the learned bias
+with a plain, hard-fixed λ. Topology, patched sidechains, box and nonbonded
+setup are identical, so any discrepancy is attributable to the treatment of λ
+itself rather than to two separately built simulations.
+
+It uses CHARMM's `ffix` flag, which suppresses integration of a block's λ
+equation of motion outright. That is a kinematic constraint, not an energetic
+bias — a distinction that is easy to miss, since both are configured through
+`BLOCK` and both get described as "restraining lambda". An earlier attempt
+here used a harmonic restraint and had to chain windows through restart files
+to stop them sticking at the boundaries; `ffix` needs none of that.
+
+See `fep_crosscheck/README.md` for the pipeline, `METHOD_NOTES.txt` for the
+transferable recipe, and `BUILD_LOG.txt` for the development history including
+the dead ends.
 
 ## Requirements
 

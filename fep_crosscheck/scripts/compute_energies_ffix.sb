@@ -1,0 +1,33 @@
+#!/bin/bash
+# Generic FFIX energy-matrix array for one system.
+# Usage: sbatch --array=0-(N_WINDOWS*CHUNKS-1) compute_energies_ffix.sb <N_WINDOWS> <CHUNKS>
+# Run from inside the target system's own root dir.
+#SBATCH --job-name=ffix_energy
+#SBATCH --time=24:00:00
+#SBATCH --ntasks=1
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=50G
+#SBATCH --gres=gpu:1
+#SBATCH --export=ALL
+#SBATCH --output=ffix/out/ffix_energy_%A_%a.o
+#SBATCH --error=ffix/out/ffix_energy_%A_%a.e
+
+module load anaconda/2024.10 cgenff openbabel charmm
+export PYTHONPATH=/export/apps/RockyOS8/charmm/envs/c51a2-April_2026/lib/python3.12/site-packages:$PYTHONPATH
+
+mkdir -p ffix/out
+
+N_WINDOWS=${1:-20}
+CHUNKS=${2:-5}
+
+TASK_ID=${SLURM_ARRAY_TASK_ID}
+RANK=$(( TASK_ID % N_WINDOWS ))
+CHUNK_ID=$(( TASK_ID / N_WINDOWS ))
+
+echo "[SLURM] TASK_ID=$TASK_ID -> rank=$RANK chunk_id=$CHUNK_ID (N_WINDOWS=$N_WINDOWS, CHUNKS=$CHUNKS)"
+
+python3 ${SCRIPTDIR:?set SCRIPTDIR to this repo's scripts/ dir}/compute_energies_ffix.py \
+  --rank ${RANK} --size ${N_WINDOWS} --chunks ${CHUNKS} --chunk_id ${CHUNK_ID}
+
+scontrol show job $SLURM_JOB_ID

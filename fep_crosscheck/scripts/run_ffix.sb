@@ -1,0 +1,30 @@
+#!/bin/bash
+# Generic FFIX production array for one system.
+# Usage: sbatch --array=0-19 run_ffix.sb <nequil> <nprod> <nsavc>
+# Run from inside the target system's own root dir (apo_patch/, apo_6site/,
+# apo_7site/) -- cwd must be the sysdir so prep/ relative paths resolve.
+#SBATCH --job-name=ffix_prod
+#SBATCH --time=48:00:00
+#SBATCH --ntasks=1
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=50G
+#SBATCH --gres=gpu:1
+#SBATCH --export=ALL
+#SBATCH --output=ffix/out/ffix_prod_%A_%a.o
+#SBATCH --error=ffix/out/ffix_prod_%A_%a.e
+
+module load anaconda/2024.10 cgenff openbabel charmm
+export PYTHONPATH=/export/apps/RockyOS8/charmm/envs/c51a2-April_2026/lib/python3.12/site-packages:$PYTHONPATH
+
+mkdir -p ffix/out
+
+NEQUIL=${1:-150000}
+NPROD=${2:-5000000}
+NSAVC=${3:-5000}
+
+python3 ${SCRIPTDIR:?set SCRIPTDIR to this repo's scripts/ dir}/run_ffix.py \
+  --rank ${SLURM_ARRAY_TASK_ID} --size ${SLURM_ARRAY_TASK_COUNT} \
+  --nequil ${NEQUIL} --nprod ${NPROD} --nsavc ${NSAVC}
+
+scontrol show job $SLURM_JOB_ID

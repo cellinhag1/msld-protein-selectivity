@@ -1,0 +1,28 @@
+#!/bin/bash
+# Generic FFIX gather + FastMBAR step for one system.
+# Usage: sbatch gather_and_mbar.sb <N_WINDOWS> <CHUNKS>
+# Run from inside the target system's own root dir.
+#SBATCH --job-name=ffix_mbar
+#SBATCH --time=30:00:00
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=50G
+#SBATCH -p cpu
+#SBATCH --output=ffix/out/ffix_mbar_%j.out
+#SBATCH --error=ffix/out/ffix_mbar_%j.err
+
+source /export/apps/RockyOS8/anaconda/2024.10/etc/profile.d/conda.sh
+conda activate charmm_me1
+
+N_WINDOWS=${1:-20}
+CHUNKS=${2:-5}
+SCRIPTDIR=${SCRIPTDIR:?set SCRIPTDIR to this repo's scripts/ dir}
+
+python3 ${SCRIPTDIR}/gather_ffix.py --nwindows ${N_WINDOWS} --nchunks ${CHUNKS}
+
+python3 ${SCRIPTDIR}/run_mbar.py \
+  --A ffix/output/A.npy \
+  --Nk ffix/output/Nk.npy \
+  --bootstrap --bootstrap_num_rep 200 \
+  --out ffix/output/mbar_results.npz
+
+scontrol show job $SLURM_JOB_ID

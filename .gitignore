@@ -8,3 +8,6 @@ __pycache__/
 *.err
 Result.txt
 dca*/
+*.npy
+*.npz
+slurm-*

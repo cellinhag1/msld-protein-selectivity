@@ -1,0 +1,125 @@
+================================================================================
+FFIX (fixed-lambda-window) FEP + FastMBAR pipeline -- GENERIC METHOD NOTES
+================================================================================
+This is the method, not a ready-to-run package for your system. It was built
+for a protein point-mutation project (PDE5A->PDE6 selectivity), but the
+PIPELINE SHAPE is generic alchemical FEP and should transfer directly to a
+ligand-modification FEP: set the system up the SAME WAY your MSLD/ALF runs
+already do (so the comparison is apples-to-apples -- same topology, same
+patches/dual-topology ligand, same box, same nonbonded setup), then run
+classic fixed-lambda-window FEP instead of MSLD's adaptively-biased lambda
+dynamics, extract energies from the saved DCDs, and combine with FastMBAR.
+
+Read project_info__ffix_fep_scan.txt for the full story: why this approach,
+every real bug hit building it (7 iterations to get one clean window), and
+what's still open. It explains the `ffix` BLOCK keyword itself in detail
+(Section 1.2: it's a kinematic lambda-lock, NOT an energetic bias -- a
+different mechanism from MSLD's restrained/biased lambda dynamics).
+
+--------------------------------------------------------------------------------
+THE FOUR STEPS (same shape regardless of system)
+--------------------------------------------------------------------------------
+1. SET UP THE SYSTEM EXACTLY LIKE YOUR MSLD RUN DOES, then override only the
+   BLOCK command. See scripts/run_ffix.py. Concretely: stream the SAME prep
+   file your MSLD/ALF setup already uses (topology, patches/dual-topology
+   ligand, psf/crd, crystal/image, nonbonded) -- this guarantees apples-to-
+   apples with your MSLD number, since everything except the lambda
+   treatment itself is identical. Then throw out MSLD's learned-bias BLOCK
+   and replace it with a plain, zero-bias, HARD-FIXED one:
+       qldm theta
+       lang temp @temp
+       ldin 1 1.0       0.0 5.0 0.0 5.0
+       ldin 2 @ffixlam1 0.0 5.0 0.0 5.0
+       ldin 3 @ffixlam2 0.0 5.0 0.0 5.0
+       adex 2 3
+       rmla bond thet impr
+       msld 0 1 1 ffix      <- the actual lambda-fixing flag
+       msma
+       soft w14
+       pmel ex
+       ldbi 0
+   example_reference_block_setup/sc_blocksetup_ffix.inp is OUR version of
+   this file (2-block, protein-sidechain case) -- useful as a worked
+   TEMPLATE for the keywords/structure, but your `Call 2/3 sele ... end`
+   selections will instead pick out your ligand's two end-state fragments
+   (whatever dual-topology core+substituent selection your own MSLD ligand
+   setup already defines), not protein sidechain atoms. Everything else in
+   the block (ldin/adex/rmla/msld/msma/soft/pmel/ldbi lines) carries over
+   unchanged for a simple 2-state (1-site) transformation.
+   IMPORTANT gotcha (project_info write-up Section 4.4): whatever structure
+   you start each window from was probably relaxed under MSLD's own skewed
+   initial lambda split (ALF's lambda0 formula biases heavily toward one
+   substituent at cycle 1), so the "off" state's atoms were never really
+   force-relaxed. Hard-fixing lambda mid-range instantly gives that
+   substituent full weight -> a short per-window steepest-descent
+   pre-minimization AT THAT WINDOW'S OWN FIXED LAMBDA, before any dynamics,
+   is not optional (see run_ffix.py's `mini sd nstep 250 ...` call) -- skip
+   it and expect NaN blowups at intermediate windows.
+
+2. RUN THE FIXED-LAMBDA WINDOWS. scripts/run_ffix.py + run_ffix.sb.
+   lambda = linspace(0, 1, --size)[--rank] for each window; each window is a
+   fully independent equilibrium run (no restart-chaining between windows --
+   that's the whole appeal over a restrained/biased lambda scan: nothing to
+   drag through a barrier within one window). Saves a DCD per window.
+
+3. EXTRACT ENERGIES FROM THE DCDs: THE MBAR CROSS-ENERGY MATRIX.
+   scripts/compute_energies_ffix.py. For EVERY window's saved DCD, replay
+   every frame and re-evaluate the energy under EVERY OTHER window's
+   fixed-lambda Hamiltonian (not just its own) -- that all-pairs reduced-
+   energy matrix (beta*U, shape [n_windows, n_frames]) is what MBAR needs.
+   Splits each window's frames into --chunks pieces so one job doesn't have
+   to hold/process an entire window's trajectory at once. Two things that
+   bit us here, likely to bite any system:
+     - mdtraj's DCDTrajectoryFile has no `.n_frames` in some versions --
+       read() the array and take its frame-axis length instead (Section 4.5
+       of the write-up).
+     - FastMBAR/torch may need a CPU-safe conda env distinct from whatever
+       GPU-linked torch your CHARMM module's Python ships with (Section 4.6)
+       -- ours needed a separate `charmm_me1` env; expect to need the
+       equivalent on a different cluster. To build your own (same package
+       set as ours, Python 3.9):
+           conda create -n fastmbar_env -c conda-forge python=3.9 numpy mdtraj pytorch-cpu
+           conda activate fastmbar_env
+           pip install FastMBAR==1.4.6
+       (If you're on the SAME cluster/filesystem as this project and in the
+       same unix group, `charmm_me1` itself is group-readable and can be
+       activated directly by full path as a stopgap -- but building your
+       own is safer long-term since it's a personal env, not a shared or
+       maintained one.)
+   scripts/gather_ffix.py then concatenates every window/chunk matrix into
+   one A.npy (states x all frames) + Nk.npy (frames per window).
+
+4. RUN FASTMBAR. scripts/run_mbar.py -- thin wrapper around the FastMBAR
+   package: feed it A.npy/Nk.npy (already reduced to kT units), get back
+   the full pairwise free-energy matrix in kT, convert by kT to kcal/mol,
+   optionally bootstrap for error bars. Final DeltaG(lambda=0->lambda=1) is
+   one entry of that matrix (see run_mbar.py's own total_ddG_kT line for
+   which one). Output: mbar_results.npz + a human-readable
+   *_DeltaF_kcal.csv (full MxM matrix, not just the single number).
+
+Orchestration: submit_ffix_chain.sh chains all three Slurm stages (steps 2,
+3, 4 above) with --dependency=afterok so the whole thing runs unattended
+once launched.
+
+--------------------------------------------------------------------------------
+THINGS TO ADAPT / RE-CHECK ON A DIFFERENT CLUSTER OR A DIFFERENT SYSTEM
+--------------------------------------------------------------------------------
+- The .sb files hardcode OUR cluster's module names (`anaconda/2024.10
+  cgenff openbabel charmm`), a CHARMM-module PYTHONPATH, GPU partition names
+  (ada5000/ada6000), and an absolute SCRIPTDIR path -- all will need
+  updating to match wherever this actually runs.
+- run_ffix.py assumes cwd == the system's own root dir so its prep/*
+  relative paths resolve (same convention our ALF-style system directories
+  use) -- adjust to however your ligand-FEP system's own prep files are
+  laid out.
+- For a ligand transformation specifically: if it's charge-changing (net
+  charge differs between end states), that's a separate methodological
+  question (PME/analytic charge corrections) that this pipeline does NOT
+  handle -- it was built for charge-neutral sidechain mutations. Worth
+  checking before assuming the raw FFIX number is final if that applies.
+- Number of windows (20 here) and ns/window (10 ns) were chosen for a
+  system with a known barrier around the lambda range's middle (identified
+  independently via a prior restrained-lambda scan) -- not a universal
+  default; concentrate windows wherever your own system's overlap/variance
+  turns out to be worst.
+================================================================================

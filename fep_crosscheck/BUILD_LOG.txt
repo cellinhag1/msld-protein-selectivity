@@ -1,0 +1,280 @@
+================================================================================
+FIXED-LAMBDA-WINDOW (FFIX) FEP SCAN FOR apo_patch / apo_6site / apo_7site
+Written: 2026-10-27
+================================================================================
+This is a dedicated write-up for one self-contained piece of work: building a
+classic fixed-lambda-window FEP pipeline (window-per-lambda, MBAR at the end)
+as an INDEPENDENT cross-check of ALF's own adaptively-biased lambda-dynamics
+result, for the apo_patch (8-site), apo_6site (6-site), and apo_7site (7-site,
++D803P) coupled-lambda PDE5A->PDE6 systems. It complements, and should be read
+alongside, project_info__yujin_pde_coupled.txt (the main running log for this
+project -- see Sections 17-23 there for the ALF-side history this grew out
+of). Code lives in yujin/selectivity/msld/ffix_scan/ (shared, generic across
+all three systems) plus one small per-system file in each system's own
+prep/aa_stream/.
+
+--------------------------------------------------------------------------------
+1. BACKGROUND / WHY THIS EXISTS
+--------------------------------------------------------------------------------
+1.1 The ALF bias-check that motivated it. An earlier 21-window, sequentially-
+    chained, harmonically-restrained lambda scan on the original apo_patch
+    8-site system (Section 19 of the main log) found a real, large free-
+    energy barrier: windows 0-10 (lambda ~0.00-0.50) stayed pinned at
+    occupancy ~0.0000, windows 11-13 were the actual transition zone, and
+    windows 14-20 (lambda ~0.70-1.00) pinned at ~0.9999. That investigation
+    used a HARMONIC RESTRAINT (LDIN linear bias + LDBV pairwise bias chained
+    across windows via restart files) -- not a true fixed lambda -- because
+    MSLD/ALF's own machinery doesn't hard-fix lambda the way classic FEP does.
+    The restraint approach works but has real friction: windows have to be
+    chained (cold-starting each one independently gets stuck at the
+    boundaries), and the result isn't yet a clean MBAR free energy (that
+    requires adding back the window-dependent 0.5*K*center^2 constant that
+    was deliberately omitted from the dynamics-only bias values -- still not
+    done, see Section 19.2 of the main log).
+
+1.2 The colleague's question. Separately, the user was asked by a colleague
+    whether their OWN ME1 ligand-FEP scripts (run_fep_277_tri2.py,
+    thanh_compute_energies_2.py, in ME1_project/fep/) put "a bias on lambda"
+    via the `ffix` keyword in the MSLD BLOCK command. This was investigated
+    by reading pycharmm's block.py source and the user-pasted
+    get_ffix_direct()/get_bias_params_direct() API docs: FFIX sets a boolean
+    per-block flag (CHARMM's internal `qlfix` array) that suppresses
+    integration of that block's lambda equation of motion entirely -- a
+    KINEMATIC CONSTRAINT, categorically different from an energetic bias
+    (which lives in a separate force_const/ref_up/ref_low data structure).
+    Answer relayed to the colleague: ffix hard-locks lambda at one fixed
+    value per window, zero bias, zero restraint; MBAR is built by cross-
+    evaluating every window's frames under every OTHER window's fixed-lambda
+    Hamiltonian. This is classic window-based FEP, not biased/restrained
+    lambda-dynamics.
+
+1.3 The idea. Since (a) a real barrier was already independently confirmed
+    to exist via the restraint-chain approach, and (b) the user already had
+    a validated, working ffix-based classic-FEP pipeline for an unrelated
+    ligand-mutation project, the natural next step was: adapt that SAME
+    ffix-based approach to apo_patch/apo_6site/apo_7site. The appeal over
+    the restraint-chain: each window is a fully independent equilibrium run
+    at one fixed composition -- there's no barrier to climb WITHIN a window
+    (unlike the restrained chain, which still had to drag lambda through the
+    barrier region), so no window-chaining is needed and a real MBAR
+    estimate falls out directly.
+
+--------------------------------------------------------------------------------
+2. WHY ONE GENERIC PIPELINE WORKS FOR ALL THREE SYSTEMS
+--------------------------------------------------------------------------------
+All three systems (apo_patch/apo_6site/apo_7site) are built, via ALF's own
+prep chain, as ONE coupled alchemical site with exactly two real MSLD blocks:
+coupleloop.inp merges every individual residue's native-sidechain atoms into
+one selection (site1sub1) and every mutant-sidechain atom into another
+(site1sub2), regardless of how many residues (6, 7, or 8) or which ones are
+involved. That means the BLOCK command needed for a fixed-lambda scan is
+LITERALLY IDENTICAL across all three systems:
+    Call 2 sele site1sub1 end
+    Call 3 sele site1sub2 end
+    ...
+    msld 0 1 1 ffix
+The only structural difference is apo_7site's D803P site (site 3), which
+uses whole-residue CATS (backbone duplication) instead of sidechain-only
+patching, and therefore needs 5 extra `cats` tether lines (pinning the
+duplicated N/CA/HA/C/O backbone atoms to the real backbone) -- a STRUCTURAL
+requirement independent of ALF vs. FFIX, inherited verbatim from the already-
+validated ALF sc_blocksetup.inp for that system.
+
+Design consequence: ONE shared, fully generic Python driver script works for
+all three systems (it only ever references the generic `site1sub1`/
+`site1sub2` selections, never a residue name), and the only per-system
+artifact is a small CHARMM fragment -- prep/aa_stream/sc_blocksetup_ffix.inp
+-- that's identical in apo_patch and apo_6site, and differs from those only
+by the 5 CATS lines in apo_7site.
+
+--------------------------------------------------------------------------------
+3. PIPELINE COMPONENTS
+--------------------------------------------------------------------------------
+Shared code: yujin/selectivity/msld/ffix_scan/
+  run_ffix.py              - production driver. --rank/--size pick this
+                              window's lambda = linspace(0,1,size)[rank].
+                              Reuses prep/apo.inp verbatim (topology,
+                              patches, psf/crd, crystal/image -- same files
+                              ALF itself uses), then overrides the BLOCK with
+                              the plain FFIX version, minimizes, equilibrates,
+                              and runs production. No restart-chaining
+                              between windows -- each is fully independent.
+  run_ffix.sb               - one array task per window.
+  compute_energies_ffix.py  - re-scores one window's DCD frames under every
+                              OTHER window's fixed-lambda Hamiltonian
+                              (the actual MBAR cross-energy-matrix step).
+                              Frame range split into --chunks pieces (same
+                              fix the user's own ME1 project used for "too
+                              much data" in one job -- see Section 5.5 below
+                              for how frame counting itself needed fixing).
+  compute_energies_ffix.sb  - 2D array (window x chunk) -> one task each.
+  gather_ffix.py            - concatenates per-window per-chunk matrices into
+                              the final A.npy (states x all frames) / Nk.npy
+                              (frames per window) that FastMBAR consumes.
+  run_mbar.py               - copied verbatim from the user's ME1_project/fep/
+                              (FastMBAR wrapper with bootstrap error bars).
+  gather_and_mbar.sb        - runs gather_ffix.py then run_mbar.py.
+  submit_ffix_chain.sh      - orchestrates the 3-stage dependency chain
+                              (production -> afterok -> energy matrix ->
+                              afterok -> gather+MBAR) for one system on one
+                              partition.
+Per-system (prep/aa_stream/sc_blocksetup_ffix.inp):
+  apo_patch, apo_6site  - plain 2-block FFIX setup, no CATS.
+  apo_7site             - same, plus the 5 CATS tether lines for site 3
+                          (D803P).
+Per-run outputs land in <sysdir>/ffix/{res,dcd,out,output}/, final result at
+<sysdir>/ffix/output/mbar_results.npz (+ a human-readable
+..._DeltaF_kcal.csv).
+
+--------------------------------------------------------------------------------
+4. DEBUGGING JOURNEY / THINGS LEARNED
+--------------------------------------------------------------------------------
+Getting a single smoke-test window to run cleanly took 7 iterations. Each
+failure was real and informative; none were "just typos" in the usual sense.
+
+4.1 Comment-block truncation (recurrence of a known bug). The first
+    sc_blocksetup_ffix.inp had a 9-line leading `*` comment header. CHARMM's
+    `stream` reads a multi-line `*` comment block as ONE concatenated title
+    into a fixed-size buffer; exceeding it gives "Command line too long:
+    truncated" and a BOMLEV-triggered abort with no useful line number. This
+    exact bug bit the apo_7site build earlier this project (see Section 18
+    of the main log) -- the fix is the same: keep headers to ~4 lines.
+
+4.2 CHARMM requires a real lambda-output unit even when lambda is hard-fixed.
+    `dynamics ... nsavl -1` (the flag the user's OWN ligand-FEP script uses
+    to disable lambda-history saving) was NOT enough on its own here --
+    CHARMM's DCNTRL still aborted with "OUTPUT UNIT FOR LAMBDA WAS NOT SET"
+    whenever BLOCK's `qldm theta` is active (which it is, even under ffix,
+    since the BLOCK/MSLD machinery itself requires it). Fix: actually open a
+    unit for IUNLDM (a throwaway `.lmd` file) for both the equilibration and
+    production dynamics calls, rather than trying to omit lambda output
+    entirely. Lesson: `nsavl -1` controls how OFTEN lambda is written, not
+    whether CHARMM demands a valid unit to write it to at all.
+
+4.3 A BLaDE-internal "nbxmod=5 only" check that fired despite CHARMM itself
+    reporting NBXMOD=5 correctly (printed twice in the log, confirmed via
+    `grep NBXMOD`). Removing a redundant `update inbfrq -1 imgfrq -1` line
+    (copied from the ALF original, where it ran BEFORE nbonds was ever
+    configured) did not fix it. The fix that worked: explicitly reissue
+    `nbonds nbxmod 5` immediately before the dynamics call that engages
+    BLaDE. Not fully explained (CHARMM's own bookkeeping already said 5),
+    but reproducible and harmless to reassert explicitly.
+
+4.4 THE REAL PHYSICS BUG: NaN blowup at intermediate lambda. Once setup
+    errors were cleared, a window at lambda=0.5 blew up (BLaDE "NaN/Inf
+    detected... Check structure or parameters") a few steps into
+    equilibration. Root cause, found by comparing degrees-of-freedom and
+    re-reading sc_blocksetup.inp's own `lambda0` formula: `prep/minimized.
+    crd` was minimized under ALF's very first flattening cycle, where the
+    BLOCK's initial lambda split is NOT 50/50 -- it's ~0.999/0.001 (the
+    formula `lambda0 = 1.001 - 0.001*nsubs` biases minimization almost
+    entirely toward ONE substituent). That means the "off" substituent's
+    sidechain atoms carried ~0.1% energetic weight during that minimization
+    and were essentially never force-relaxed -- their coordinates can be
+    sitting in a real steric clash with the "on" substituent. Softcore (the
+    `soft w14` BLOCK option, active in both the ALF original and this FFIX
+    version) prevents that clash from being a literal infinite-energy
+    singularity, but it doesn't make the resulting force small -- hard-
+    fixing lambda at, say, 0.5 instantly gives that previously-near-zero-
+    weight substituent FULL weight, and the transient force was large enough
+    to blow up the integrator in a handful of steps.
+    This is exactly why the user's OWN old ligand-FEP script runs a short
+    steepest-descent minimization (250 steps, pre-BLaDE, on CPU) at each
+    window's OWN fixed lambda before any dynamics -- a detail that was
+    carried over into the new script once this reasoning was worked out, not
+    because it was obviously necessary up front. Lesson: whenever lambda is
+    hard-fixed starting from a structure that was relaxed under a very
+    different (especially very skewed) lambda, a per-window pre-minimization
+    at the TARGET lambda is not optional -- it's the only thing standing
+    between softcore's "finite" and dynamics' "small enough to integrate."
+
+4.5 mdtraj's DCDTrajectoryFile has no `.n_frames` attribute in the version
+    installed here (AttributeError, not a transient failure). Confirmed the
+    user's OWN original thanh_compute_energies_prot_277_tri2.py has the
+    identical try/.n_frames/except/fallback pattern -- so this wasn't a
+    design mistake, it's the same code. The difference was the FALLBACK: the
+    user's original fell back to `md.iterload(..., top=coor_start)` where
+    coor_start was a `.pdb` file (mdtraj can parse that as topology); this
+    project's prep convention only ever produces `prep/minimized.crd` (no
+    `.pdb` equivalent exists in either apo_patch's or apo_7site's prep/),
+    and mdtraj's iterload cannot parse `.crd` as a topology at all. Fixed by
+    calling `DCDTrajectoryFile(path).read()` directly and taking the
+    resulting array's frame-axis length -- gets the count straight from the
+    DCD itself, no external topology file needed.
+
+4.6 FastMBAR/torch needs a specific conda env. The charmm-module's own
+    Python site-packages (used for all the CHARMM/pycharmm steps) has a
+    GPU-linked torch whose libc10_cuda.so fails with "undefined symbol:
+    cudaGetDriverEntryPointByVersion" when FastMBAR imports it on this
+    cluster. The user's own pre-existing `charmm_me1` conda env (under
+    ~/.conda/envs/, presumably set up for exactly this purpose during the
+    original ME1 project) has a working CPU-safe torch + FastMBAR. Fixed
+    gather_and_mbar.sb to `conda activate charmm_me1` instead of loading the
+    charmm module's PYTHONPATH. (The gather+MBAR step runs on the `cpu`
+    partition anyway, so a GPU-linked torch was never the right tool there.)
+
+4.7 Interactive debugging without re-queuing every iteration. Repeated
+    sbatch-and-wait cycles on ada6000 were each costing 15-20+ minutes of
+    pure queue time, on top of the actual ~20-second failures being
+    diagnosed. The user's cluster admin (Dave) pointed to a tmux-based
+    interactive-job pattern (a shared tmux job template) for exactly this
+    situation. Adapted the underlying idea without needing a live terminal:
+    submit ONE long `sbatch --wrap="sleep N"` job to reserve a GPU allocation
+    once, then run every subsequent debug command via
+    `srun --jobid=<held-job-id> --ntasks=1 <command>` -- this launches as a
+    job STEP inside the already-granted allocation, starting instantly, no
+    new queueing. Cut iteration time from ~15-20 minutes to ~seconds for the
+    rest of the debugging session. Released the held allocation
+    (`scancel`) once the pipeline was validated end-to-end.
+
+4.8 This cluster's sbatch rejects multi-partition requests. Tried
+    `#SBATCH -p ada5000,ada6000` (and `--partition=ada5000,ada6000`) to let
+    Slurm pick whichever partition had room; got "Multiple partition job
+    request not supported when a partition is set in the association" --
+    this account's Slurm association pins a single partition per job.
+    Worked around by submitting separate `sbatch` calls per partition
+    instead (either splitting one system's array range across two calls, or
+    -- what was actually used in the end, per explicit request -- assigning
+    whole SYSTEMS to different partitions: apo_patch -> ada5000,
+    apo_6site/apo_7site -> ada6000).
+
+--------------------------------------------------------------------------------
+5. CURRENT STATUS (as of 2026-10-27, end of this write-up's session)
+--------------------------------------------------------------------------------
+All three systems submitted as independent 3-stage chains (production ->
+energy matrix -> gather+MBAR), 20 windows each, 10 ns production per window
+(300 ps equilibration + 250-step pre-minimization at each window's own fixed
+lambda first, per Section 4.4), 5 frame-chunks per window for the energy pass:
+
+  apo_patch  (8-site, original)  -> ada5000   prod 7575173 / energy 7575174 / mbar 7575175
+  apo_6site  (6-site, no D803P)  -> ada6000   prod 7575176 / energy 7575177 / mbar 7575178
+  apo_7site  (7-site, +D803P)    -> ada6000   prod 7575179 / energy 7575180 / mbar 7575181
+
+Final ΔG (lambda=0 -> lambda=1) will land in each system's own
+ffix/output/mbar_results.npz and ffix/output/mbar_results_DeltaF_kcal.csv
+once its chain completes.
+
+--------------------------------------------------------------------------------
+6. STILL OUTSTANDING / NEXT STEPS
+--------------------------------------------------------------------------------
+  - Confirm all three chains complete cleanly; sanity-check the per-window
+    energy matrices (no NaN, reasonable overlap between adjacent windows --
+    MBAR will warn/fail outright if overlap is too poor, which is itself
+    useful diagnostic information about the barrier located in Section 1.1).
+  - Compare apo_patch's FFIX-derived DeltaG against ALF's own
+    analysis250/Result.txt (the ALF bias-derived value, not
+    directly comparable units but the SIGN and rough magnitude should agree)
+    as a cross-check between the two independent methods.
+  - Given the barrier was already localized to roughly lambda 0.50-0.70
+    (Section 1.1), a follow-up run with windows concentrated in that region
+    instead of uniform spacing would give better-resolved overlap/statistics
+    there -- not done in this first pass (uniform 20 windows was the
+    explicit request).
+  - This is still an APO-ONLY result for all three systems -- says nothing
+    about PDE5A-vs-PDE6 selectivity by itself (the complex leg still doesn't
+    exist for either revised residue set; flagged repeatedly in the main
+    log, still true here).
+  - The original 21-window harmonic-restraint chain's own MBAR reconstruction
+    (Section 19.2 of the main log) is STILL not done; this FFIX scan is a
+    parallel, independent method, not a replacement for finishing that one.
+================================================================================

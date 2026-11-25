@@ -1,0 +1,29 @@
+* Plain FFIX 2-block MSLD setup for the fixed-lambda-window FEP scan.
+* Caller must set @ffixlam1, @ffixlam2, @temp first.
+*
+BLOCK 3
+   clear
+END
+
+BLOCK 3
+   Call 2 sele site1sub1 end
+   Call 3 sele site1sub2 end
+
+   qldm theta
+   lang temp @temp
+
+   ldin 1 1.0       0.0 5.0 0.0 5.0
+   ldin 2 @ffixlam1 0.0 5.0 0.0 5.0
+   ldin 3 @ffixlam2 0.0 5.0 0.0 5.0
+
+   adex 2 3
+
+   rmla bond thet impr
+   msld 0 1 1 ffix
+   msma
+
+   soft w14
+   pmel ex
+
+   ldbi 0
+END
